@@ -16,6 +16,6 @@ Retrieval-Augmented Generation (RAG) systems often suffer from **Context Window 
 ## 🛠️ Installation
 
 ```bash
-git clone [https://github.com/YourUsername/SEAS-RAG.git](https://github.com/YourUsername/SEAS-RAG.git)
+git clone [https://github.com/2025020005/SEAS-RAG.git](https://github.com/2025020005/SEAS-RAG.git)
 cd SEAS-RAG
 pip install -r requirements.txt
