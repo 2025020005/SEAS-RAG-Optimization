@@ -1,21 +1,23 @@
 import numpy as np
+import pandas as pd
 
 class PrefixBucketing:
     """
-    Core Module 2: Prefix-based Bucketing using LSH logic.
-    Reduces complexity from O(N^2) to O(N).
+    Implements O(N) Blocking strategy using LSH-style Random Projection.
     """
-    def __init__(self, input_dim=448, n_bits=8):
-        # 384 (MiniLM) + 64 (TF-IDF) = 448 dimensions
-        np.random.seed(42)
-        self.projections = np.random.randn(input_dim, n_bits)
+    def __init__(self, input_dim, num_buckets=8, seed=42):
+        np.random.seed(seed)
+        # Random projection matrix to project high-dim vectors to discrete buckets
+        self.projections = np.random.randn(input_dim, num_buckets)
 
     def assign(self, vectors):
-        """
-        Project high-dim vectors to discrete bucket IDs.
-        """
-        # Dot product
+        # x . P > 0 -> Boolean Hash
         hashes = np.dot(vectors, self.projections) > 0
-        # Convert boolean array to integer (Pack bits)
+        # Convert bool array to integer bucket IDs
         bucket_ids = np.packbits(hashes, axis=1).flatten()
         return bucket_ids
+
+    def group(self, indices, bucket_ids):
+        """Groups original indices by bucket ID for processing."""
+        df = pd.DataFrame({'idx': indices, 'bucket': bucket_ids})
+        return df.groupby('bucket')

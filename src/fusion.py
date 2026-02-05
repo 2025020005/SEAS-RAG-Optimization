@@ -3,45 +3,50 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 class AdaptiveFusion:
     """
-    Core Module 3: Adaptive Thresholding for Deduplication.
+    Implements Confidence-Aware Dynamic Thresholding.
     """
-    def __init__(self, base_threshold=0.90):
+    def __init__(self, base_threshold=0.85):
         self.base_threshold = base_threshold
 
-    def deduplicate(self, vectors, bucket_ids):
+    def compute_threshold(self, doc_len_a, doc_len_b):
         """
-        Perform deduplication within buckets.
+        Dynamically adjusts threshold.
+        Hypothesis: Longer documents contain more noise/detail, requiring stricter (higher) similarity.
+        Short documents (snippets) can be merged more aggressively (lower threshold).
         """
-        n = len(vectors)
-        keep_mask = np.ones(n, dtype=bool)
+        # Simple heuristic: Use length as a proxy for information density/confidence
+        avg_len = (doc_len_a + doc_len_b) / 2
         
-        # Iterate over unique buckets
-        unique_buckets = np.unique(bucket_ids)
+        # If texts are long (>300 chars), raise threshold to 0.90
+        # If texts are short, lower to 0.82
+        adaptive_offset = 0.05 if avg_len > 300 else -0.03
         
-        for b_id in unique_buckets:
-            # Get indices in this bucket
-            indices = np.where(bucket_ids == b_id)[0]
-            if len(indices) < 2:
-                continue
-                
-            # Compute similarity matrix for this bucket
-            block_vecs = vectors[indices]
-            sim_matrix = cosine_similarity(block_vecs)
+        return np.clip(self.base_threshold + adaptive_offset, 0.75, 0.98)
+
+    def deduplicate_bucket(self, embeddings, indices, texts):
+        """
+        Runs O(B^2) deduplication only within a small bucket.
+        """
+        if len(indices) < 2:
+            return indices.tolist()
+
+        local_embs = embeddings[indices]
+        sim_matrix = cosine_similarity(local_embs)
+        
+        keep_mask = np.ones(len(indices), dtype=bool)
+        
+        # Greedy clustering within bucket
+        for i in range(len(indices)):
+            if not keep_mask[i]: continue
             
-            # Simple greedy clustering
-            # Mark items as removed if they are similar to a previous item
-            for i in range(len(indices)):
-                if not keep_mask[indices[i]]:
-                    continue
+            for j in range(i + 1, len(indices)):
+                if not keep_mask[j]: continue
                 
-                # Check similarity with subsequent items
-                for j in range(i + 1, len(indices)):
-                    if not keep_mask[indices[j]]:
-                        continue
-                        
-                    sim = sim_matrix[i, j]
-                    # Dynamic Threshold Logic (Simplified)
-                    if sim > self.base_threshold:
-                        keep_mask[indices[j]] = False # Drop redundant
-                        
-        return np.where(keep_mask)[0]
+                sim = sim_matrix[i, j]
+                # Dynamic Threshold Check
+                thresh = self.compute_threshold(len(texts[indices[i]]), len(texts[indices[j]]))
+                
+                if sim > thresh:
+                    keep_mask[j] = False # Mark as duplicate
+        
+        return indices[keep_mask].tolist()
