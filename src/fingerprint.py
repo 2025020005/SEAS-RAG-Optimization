@@ -1,38 +1,35 @@
 import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 class HybridFingerprint:
     """
-    Core Module 1: Generates Hybrid Semantic Fingerprints.
-    Combines dense embeddings (MiniLM) with sparse features (TF-IDF).
+    Generates SEAS Hybrid Fingerprints:
+    Fusion of Dense Embeddings (SBERT) + Sparse Features (TF-IDF).
     """
     def __init__(self, model_name='all-MiniLM-L6-v2'):
-        print(f"Loading Encoder: {model_name}...")
+        print(f"🤖 [Model] Loading SBERT: {model_name}")
         self.encoder = SentenceTransformer(model_name)
-        # Max features limited to 64 for efficiency
         self.vectorizer = TfidfVectorizer(max_features=64, stop_words='english')
         self.is_fitted = False
 
-    def generate(self, texts, alpha=0.6):
+    def generate(self, texts, alpha=0.5):
         """
-        Generate hybrid vectors. 
-        Alpha controls the weight of dense embeddings (0.0 to 1.0).
+        Returns: concatenated [dense_vector, sparse_vector]
         """
-        # 1. Dense Embeddings
-        dense_vecs = self.encoder.encode(texts)
-        
-        # 2. Sparse Features (TF-IDF)
+        # 1. Dense Semantic Features
+        dense = self.encoder.encode(texts, batch_size=64, show_progress_bar=True)
+        # Normalize
+        dense_norm = dense / (np.linalg.norm(dense, axis=1, keepdims=True) + 1e-9)
+
+        # 2. Sparse Lexical Features
         if not self.is_fitted:
-            sparse_vecs = self.vectorizer.fit_transform(texts).toarray()
+            sparse = self.vectorizer.fit_transform(texts).toarray()
             self.is_fitted = True
         else:
-            sparse_vecs = self.vectorizer.transform(texts).toarray()
-            
-        # 3. L2 Normalization
-        dense_norm = dense_vecs / np.linalg.norm(dense_vecs, axis=1, keepdims=True)
-        # Avoid division by zero for short texts
-        sparse_norm = sparse_vecs / (np.linalg.norm(sparse_vecs, axis=1, keepdims=True) + 1e-9)
-        
-        # 4. Concatenation
-        return np.hstack((alpha * dense_norm, (1-alpha) * sparse_norm))
+            sparse = self.vectorizer.transform(texts).toarray()
+        # Normalize
+        sparse_norm = sparse / (np.linalg.norm(sparse, axis=1, keepdims=True) + 1e-9)
+
+        # 3. Hybrid Fusion
+        return np.hstack((alpha * dense_norm, (1 - alpha) * sparse_norm))
