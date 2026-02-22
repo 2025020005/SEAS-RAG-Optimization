@@ -21,31 +21,30 @@ def calc_irr(kept_indices, true_labels):
     return len(kept_labels) / len(total_unique) * 100
 
 def run_experiment():
-    print("🚀 [Main] Starting SEAS-RAG Benchmark (Including SemDeDup & Table Generation)...")
+    print("🚀 [Main] Starting SEAS-RAG Benchmark (Vectorized & Optimized)...")
     
     loader = RealDataLoader()
     texts, labels = loader.get_dataset()
     total_docs = len(texts)
     
     fp = HybridFingerprint()
-    # SEAS 混合向量
     all_vectors = fp.generate(texts, alpha=0.5)
-    # SemDeDup 纯稠密向量 (SemDeDup)
     dense_vectors = fp.generate(texts, alpha=1.0) 
     
-    bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=4) 
+    # 调优：使用 6-bits (64个桶)，极大降低桶内计算量
+    bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=6) 
     fuser = AdaptiveFusion(base_threshold=0.60) 
     
     # ---------------------------------------------------------
-    # 1. SimHash (Lexical Baseline)
+    # 1. SimHash
     # ---------------------------------------------------------
     print("\n--- Running Baseline: SimHash ---")
     start = time.time()
     hashes = set()
     kept_sim = []
     for idx, text in enumerate(texts):
-        tokens = [text[i:i+3] for i in range(len(text)-2)]
-        h = hash(tuple(sorted(tokens)[:30])) if tokens else hash(text)
+        tokens = text.lower().split()
+        h = hash(tuple(tokens[:10])) if tokens else hash(text)
         if h not in hashes:
             hashes.add(h)
             kept_sim.append(idx)
@@ -54,7 +53,7 @@ def run_experiment():
     irr_sim = calc_irr(kept_sim, labels)
 
     # ---------------------------------------------------------
-    # 2. SBERT-KMeans (Clustering Baseline)
+    # 2. SBERT-KMeans 
     # ---------------------------------------------------------
     print("--- Running Baseline: SBERT-KMeans ---")
     start = time.time()
@@ -66,21 +65,19 @@ def run_experiment():
     irr_bert = calc_irr(kept_bert, labels)
 
     # ---------------------------------------------------------
-    # 3. SemDeDup (Semantic Fixed-Threshold Baseline)
+    # 3. SemDeDup 
     # ---------------------------------------------------------
     print("--- Running Baseline: SemDeDup ---")
     start = time.time()
-    # SemDeDup 使用全局相似度矩阵和固定阈值 (O(N^2) 复杂度)
     sim_matrix = np.dot(dense_vectors, dense_vectors.T)
     keep_semdedup = np.ones(total_docs, dtype=bool)
-    semdedup_threshold = 0.85 # 论文中的典型阈值
+    semdedup_threshold = 0.85 
     
     for i in range(total_docs):
         if not keep_semdedup[i]: continue
-        for j in range(i + 1, total_docs):
-            if not keep_semdedup[j]: continue
-            if sim_matrix[i, j] > semdedup_threshold:
-                keep_semdedup[j] = False
+        sims = sim_matrix[i, i+1:]
+        dupes = np.where(sims > semdedup_threshold)[0] + i + 1
+        keep_semdedup[dupes] = False
                 
     kept_semdedup_idx = np.where(keep_semdedup)[0]
     time_semdedup = (time.time() - start) * 1000
@@ -88,7 +85,7 @@ def run_experiment():
     irr_semdedup = calc_irr(kept_semdedup_idx, labels)
 
     # ---------------------------------------------------------
-    # 4. SEAS (Ours)
+    # 4. SEAS (Ours) 
     # ---------------------------------------------------------
     print("--- Running Model: SEAS ---")
     start = time.time()
@@ -105,7 +102,7 @@ def run_experiment():
 
 
     # =========================================================
-    # 生成论文表格数据 (Console Output for Table I)
+    # 生成论文表格数据
     # =========================================================
     print("\n" + "="*50)
     print("🏆 PERFORMANCE COMPARISON (For LaTeX Table I)")
@@ -119,7 +116,6 @@ def run_experiment():
     ]
     
     df = pd.DataFrame(table_data, columns=["Method", "RR (%)", "IRR (%)", "Latency (ms)"])
-    # 格式化输出，方便直接抄进论文
     print(df.to_string(index=False, float_format="%.1f"))
     print("="*50 + "\n")
 
@@ -136,6 +132,9 @@ def run_experiment():
     plt.ylabel('Latency (ms)')
     plt.title('Processing Efficiency (Lower is Better)')
     plt.grid(True, linestyle='--', alpha=0.5)
+    
+    plt.ylim(0, max(times) * 1.25)
+    
     for i, v in enumerate(times):
         plt.text(i, v + max(times)*0.05, f"{v:.0f}ms", ha='center')
     plt.savefig('../assets/latency_plot.pdf', bbox_inches='tight')
@@ -153,7 +152,7 @@ def run_experiment():
     plt.ylim(0, 115)
     plt.savefig('../assets/accuracy_plot.pdf', bbox_inches='tight')
     
-    print("✅ Main Benchmark Complete. 'accuracy_plot.pdf' and 'latency_plot.pdf' updated in assets/.")
+    print("✅ Experiment Complete. 'accuracy_plot.pdf' and 'latency_plot.pdf' updated in assets/.")
 
 if __name__ == "__main__":
     run_experiment()

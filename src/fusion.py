@@ -1,40 +1,44 @@
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 
 class AdaptiveFusion:
-    def __init__(self, base_threshold=0.85):
+    """
+    Implements Confidence-Aware Dynamic Thresholding.
+    Optimized with Vectorized Operations for extreme speed.
+    """
+    def __init__(self, base_threshold=0.60):
         self.base_threshold = base_threshold
 
-    def compute_threshold(self, doc_len_a, doc_len_b, use_adaptive=True):
-        """
-        Args:
-            use_adaptive: 是否启用动态阈值。False 则返回固定值。
-        """
-        if not use_adaptive:
-            return self.base_threshold
-
-        # 动态逻辑
-        avg_len = (doc_len_a + doc_len_b) / 2
-        adaptive_offset = 0.05 if avg_len > 300 else -0.03
-        return np.clip(self.base_threshold + adaptive_offset, 0.75, 0.98)
-
     def deduplicate_bucket(self, embeddings, indices, texts, use_adaptive=True):
-        if len(indices) < 2: return indices.tolist()
-        
+        if len(indices) < 2: 
+            return indices.tolist()
+            
         local_embs = embeddings[indices]
-        sim_matrix = cosine_similarity(local_embs)
+        sim_matrix = np.dot(local_embs, local_embs.T) 
+        
         keep_mask = np.ones(len(indices), dtype=bool)
+        lengths = np.array([len(texts[i]) for i in indices])
         
         for i in range(len(indices)):
             if not keep_mask[i]: continue
-            for j in range(i + 1, len(indices)):
-                if not keep_mask[j]: continue
+            
+            j_idx = np.arange(i + 1, len(indices))
+            valid_j = j_idx[keep_mask[j_idx]]
+            
+            if len(valid_j) == 0:
+                continue
                 
-                sim = sim_matrix[i, j]
-                # 传入消融开关
-                thresh = self.compute_threshold(len(texts[indices[i]]), len(texts[indices[j]]), use_adaptive)
+            sims = sim_matrix[i, valid_j]
+            
+            if use_adaptive:
+                # 向量化计算动态阈值
+                avg_lens = (lengths[i] + lengths[valid_j]) / 2
+                adaptive_offsets = np.where(avg_lens > 300, 0.05, -0.03)
+                thresh = np.clip(self.base_threshold + adaptive_offsets, 0.50, 0.98) 
+            else:
+                thresh = self.base_threshold
                 
-                if sim > thresh:
-                    keep_mask[j] = False
-        
+            # 瞬间找出并标记所有冗余项
+            dupes = valid_j[sims > thresh]
+            keep_mask[dupes] = False
+            
         return indices[keep_mask].tolist()
