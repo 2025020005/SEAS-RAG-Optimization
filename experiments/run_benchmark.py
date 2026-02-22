@@ -28,12 +28,12 @@ def run_experiment():
     total_docs = len(texts)
     
     fp = HybridFingerprint()
-    all_vectors = fp.generate(texts, alpha=0.5)
+    all_vectors = fp.generate(texts, alpha=0.85)
     dense_vectors = fp.generate(texts, alpha=1.0) 
     
     # 调优：使用 6-bits (64个桶)，极大降低桶内计算量
-    bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=6) 
-    fuser = AdaptiveFusion(base_threshold=0.85) 
+    bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=2) 
+    fuser = AdaptiveFusion(base_threshold=0.75) 
     
     # ---------------------------------------------------------
     # 1. SimHash
