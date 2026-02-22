@@ -33,7 +33,7 @@ def run_experiment():
     
     # 调优：使用 6-bits (64个桶)，极大降低桶内计算量
     bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=6) 
-    fuser = AdaptiveFusion(base_threshold=0.60) 
+    fuser = AdaptiveFusion(base_threshold=0.85) 
     
     # ---------------------------------------------------------
     # 1. SimHash
