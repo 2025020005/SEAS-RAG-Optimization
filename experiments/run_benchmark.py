@@ -3,6 +3,7 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 from sklearn.cluster import MiniBatchKMeans
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '../src'))
@@ -20,19 +21,24 @@ def calc_irr(kept_indices, true_labels):
     return len(kept_labels) / len(total_unique) * 100
 
 def run_experiment():
-    print("🚀 [Main] Starting SEAS-RAG Benchmark (Tuned for Real Data)...")
+    print("🚀 [Main] Starting SEAS-RAG Benchmark (Including SemDeDup & Table Generation)...")
     
     loader = RealDataLoader()
     texts, labels = loader.get_dataset()
+    total_docs = len(texts)
     
     fp = HybridFingerprint()
+    # SEAS 混合向量
     all_vectors = fp.generate(texts, alpha=0.5)
+    # SemDeDup 纯稠密向量 (SemDeDup)
+    dense_vectors = fp.generate(texts, alpha=1.0) 
     
-    # 【关键修正】使用验证过的真实最优参数
     bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=4) 
     fuser = AdaptiveFusion(base_threshold=0.60) 
     
-    # 1. SimHash
+    # ---------------------------------------------------------
+    # 1. SimHash (Lexical Baseline)
+    # ---------------------------------------------------------
     print("\n--- Running Baseline: SimHash ---")
     start = time.time()
     hashes = set()
@@ -44,43 +50,88 @@ def run_experiment():
             hashes.add(h)
             kept_sim.append(idx)
     time_sim = (time.time() - start) * 1000
-    rr_sim = (1 - len(kept_sim)/len(texts))*100
+    rr_sim = (1 - len(kept_sim)/total_docs)*100
     irr_sim = calc_irr(kept_sim, labels)
-    print(f"SimHash: Time={time_sim:.1f}ms, RR={rr_sim:.1f}%, IRR={irr_sim:.1f}%")
 
-    # 2. SBERT-KMeans
-    print("\n--- Running Baseline: SBERT-KMeans ---")
+    # ---------------------------------------------------------
+    # 2. SBERT-KMeans (Clustering Baseline)
+    # ---------------------------------------------------------
+    print("--- Running Baseline: SBERT-KMeans ---")
     start = time.time()
     kmeans = MiniBatchKMeans(n_clusters=len(set(labels)), batch_size=256, n_init='auto', random_state=42)
-    kmeans.fit(all_vectors)
+    kmeans.fit(dense_vectors)
     _, kept_bert = np.unique(kmeans.labels_, return_index=True)
     time_bert = (time.time() - start) * 1000
-    rr_bert = (1 - len(kept_bert)/len(texts))*100
+    rr_bert = (1 - len(kept_bert)/total_docs)*100
     irr_bert = calc_irr(kept_bert, labels)
-    print(f"SBERT-KMeans: Time={time_bert:.1f}ms, RR={rr_bert:.1f}%, IRR={irr_bert:.1f}%")
 
-    # 3. SEAS (Ours)
-    print("\n--- Running Model: SEAS ---")
+    # ---------------------------------------------------------
+    # 3. SemDeDup (Semantic Fixed-Threshold Baseline)
+    # ---------------------------------------------------------
+    print("--- Running Baseline: SemDeDup ---")
+    start = time.time()
+    # SemDeDup 使用全局相似度矩阵和固定阈值 (O(N^2) 复杂度)
+    sim_matrix = np.dot(dense_vectors, dense_vectors.T)
+    keep_semdedup = np.ones(total_docs, dtype=bool)
+    semdedup_threshold = 0.85 # 论文中的典型阈值
+    
+    for i in range(total_docs):
+        if not keep_semdedup[i]: continue
+        for j in range(i + 1, total_docs):
+            if not keep_semdedup[j]: continue
+            if sim_matrix[i, j] > semdedup_threshold:
+                keep_semdedup[j] = False
+                
+    kept_semdedup_idx = np.where(keep_semdedup)[0]
+    time_semdedup = (time.time() - start) * 1000
+    rr_semdedup = (1 - len(kept_semdedup_idx)/total_docs)*100
+    irr_semdedup = calc_irr(kept_semdedup_idx, labels)
+
+    # ---------------------------------------------------------
+    # 4. SEAS (Ours)
+    # ---------------------------------------------------------
+    print("--- Running Model: SEAS ---")
     start = time.time()
     bucket_ids = bucketer.assign(all_vectors)
-    groups = bucketer.group(np.arange(len(texts)), bucket_ids)
+    groups = bucketer.group(np.arange(total_docs), bucket_ids)
     
     kept_seas = []
     for _, group in groups:
         kept_seas.extend(fuser.deduplicate_bucket(all_vectors, group['idx'].values, texts, use_adaptive=True))
         
     time_seas = (time.time() - start) * 1000
-    rr_seas = (1 - len(kept_seas)/len(texts))*100
+    rr_seas = (1 - len(kept_seas)/total_docs)*100
     irr_seas = calc_irr(kept_seas, labels)
-    print(f"SEAS: Time={time_seas:.1f}ms, RR={rr_seas:.1f}%, IRR={irr_seas:.1f}%")
 
+
+    # =========================================================
+    # 生成论文表格数据 (Console Output for Table I)
+    # =========================================================
+    print("\n" + "="*50)
+    print("🏆 PERFORMANCE COMPARISON (For LaTeX Table I)")
+    print("="*50)
+    
+    table_data = [
+        ["SimHash", rr_sim, irr_sim, time_sim],
+        ["SBERT-KMeans", rr_bert, irr_bert, time_bert],
+        ["SemDeDup", rr_semdedup, irr_semdedup, time_semdedup],
+        ["SEAS (Ours)", rr_seas, irr_seas, time_seas]
+    ]
+    
+    df = pd.DataFrame(table_data, columns=["Method", "RR (%)", "IRR (%)", "Latency (ms)"])
+    # 格式化输出，方便直接抄进论文
+    print(df.to_string(index=False, float_format="%.1f"))
+    print("="*50 + "\n")
+
+    # =========================================================
     # 绘制图表
+    # =========================================================
     os.makedirs('../assets', exist_ok=True)
-    methods = ['SimHash', 'SBERT-KMeans', 'SEAS (Ours)']
+    methods = ['SimHash', 'SBERT-KMeans', 'SemDeDup', 'SEAS (Ours)']
     
     # Plot 1: Efficiency (Latency)
-    plt.figure(figsize=(6, 4))
-    times = [time_sim, time_bert, time_seas]
+    plt.figure(figsize=(7, 4))
+    times = [time_sim, time_bert, time_semdedup, time_seas]
     plt.plot(methods, times, marker='o', color='#c44e52', linewidth=2)
     plt.ylabel('Latency (ms)')
     plt.title('Processing Efficiency (Lower is Better)')
@@ -90,19 +141,19 @@ def run_experiment():
     plt.savefig('../assets/latency_plot.pdf', bbox_inches='tight')
     
     # Plot 2: Effectiveness (RR & IRR)
-    plt.figure(figsize=(6, 4))
+    plt.figure(figsize=(7, 4))
     x = np.arange(len(methods))
     width = 0.35
-    plt.bar(x - width/2, [rr_sim, rr_bert, rr_seas], width, label='Redundancy Removal', color='#4c72b0')
-    plt.bar(x + width/2, [irr_sim, irr_bert, irr_seas], width, label='Info Retention', color='#55a868')
+    plt.bar(x - width/2, [rr_sim, rr_bert, rr_semdedup, rr_seas], width, label='Redundancy Removal', color='#4c72b0')
+    plt.bar(x + width/2, [irr_sim, irr_bert, irr_semdedup, irr_seas], width, label='Info Retention', color='#55a868')
     plt.xticks(x, methods)
     plt.ylabel('Percentage (%)')
     plt.title('Deduplication Effectiveness')
     plt.legend(loc='lower right')
-    plt.ylim(0, 110)
+    plt.ylim(0, 115)
     plt.savefig('../assets/accuracy_plot.pdf', bbox_inches='tight')
     
-    print("\n✅ Main Benchmark Complete. 'accuracy_plot.pdf' and 'latency_plot.pdf' generated in assets/.")
+    print("✅ Main Benchmark Complete. 'accuracy_plot.pdf' and 'latency_plot.pdf' updated in assets/.")
 
 if __name__ == "__main__":
     run_experiment()
