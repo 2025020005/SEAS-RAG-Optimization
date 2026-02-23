@@ -63,11 +63,11 @@ def run_downstream_simulation():
     # D. SEAS (Ours - 真实调优运算)
     print("   [4/4] Evaluating: SEAS...")
     # [核心修正]：针对下游 RAG 对高精度的要求，优化分桶宽度和合并阈值
-    bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=4) # 4 bits = 16 桶，减少漏网之鱼
+    bucketer = PrefixBucketing(input_dim=all_vectors.shape[1], num_buckets=2) # 4 bits = 16 桶，减少漏网之鱼
     b_ids = bucketer.assign(all_vectors)
     groups = bucketer.group(np.arange(len(texts)), b_ids)
     
-    fuser = AdaptiveFusion(base_threshold=0.60) # 调低阈值，捕获语义碎片
+    fuser = AdaptiveFusion(base_threshold=0.70) # 调低阈值，捕获语义碎片
     kept_seas = []
     for _, g in groups:
         kept_seas.extend(fuser.deduplicate_bucket(all_vectors, g['idx'].values, texts, use_adaptive=True))
